@@ -1,0 +1,18 @@
+# DNS中继服务器 - 本地域名-IP对照表
+# 格式: 域名 IP地址
+# 将IP设为0.0.0.0表示拦截该域名
+
+# -- 正常域名 --
+www.baidu.com 14.215.177.38
+www.qq.com 61.129.7.47
+www.bupt.edu.cn 114.255.40.25
+www.taobao.com 140.205.94.189
+www.163.com 123.126.99.144
+www.sina.com.cn 218.30.66.101
+www.zhihu.com 118.89.204.198
+www.bilibili.com 123.6.32.105
+
+# -- 拦截域名 (不良网站) --
+www.example-blocked.com 0.0.0.0
+malware.test.com 0.0.0.0
+phishing.example.com 0.0.0.0
