@@ -1,27 +1,29 @@
       
 /*
- * dnsrelay.c — DNS中继服务器
- * 计算机网络课程设计
+ * dnsrelay.c -- DNS Relay Server
+ * Computer Network Course Design
  *
- * 功能:
- *   1) DNS服务器: 查询本地"域名-IP"对照表，命中则直接回复
- *   2) 网站拦截:  表中IP为0.0.0.0时，返回"域名不存在"(NXDOMAIN)
- *   3) DNS中继:  本地未命中，转发到上游DNS，结果返回客户端
+ * Functions:
+ *   1) DNS Server:     Lookup local domain-IP table, reply directly if found
+ *   2) Website Block:  When IP is 0.0.0.0, return NXDOMAIN (domain not found)
+ *   3) DNS Relay:      If not found locally, forward to upstream DNS and relay reply
  *
- * 编译 (Windows, Visual Studio / MinGW):
+ * Compile (Windows, MinGW):
+ *   gcc dnsrelay.c -lws2_32 -o dnsrelay.exe
+ *
+ * Compile (Visual Studio):
  *   cl dnsrelay.c wsock32.lib
- *   或: gcc dnsrelay.c -lws2_32 -o dnsrelay.exe
  *
- * 命令行:
- *   dnsrelay                    # 默认: 上游 202.106.0.20, 配置文件 dnsrelay.txt
- *   dnsrelay -d                # 调试级别1
- *   dnsrelay -dd               # 调试级别2 (冗长)
- *   dnsrelay -d 8.8.8.8       # 上游DNS设为 8.8.8.8
+ * Usage:
+ *   dnsrelay                    # Default: upstream 202.106.0.20, config dnsrelay.txt
+ *   dnsrelay -d                # Debug level 1
+ *   dnsrelay -dd               # Debug level 2 (verbose)
+ *   dnsrelay -d 8.8.8.8       # Set upstream DNS
  *   dnsrelay -d 8.8.8.8 C:\table.txt
  *
- * 配置文件格式 (每行):
+ * Config file format (each line):
  *   www.baidu.com 14.215.177.38
- *   www.example.com 0.0.0.0    ← 0.0.0.0 表示拦截
+ *   www.example.com 0.0.0.0    -- 0.0.0.0 means block this domain
  */
 
 #define _CRT_SECURE_NO_WARNINGS
@@ -36,9 +38,9 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
-    #if defined(_MSC_VER)  /* MSVC 需要手动定义 */
+    #if defined(_MSC_VER)  /* MSVC needs manual definition */
         #define strcasecmp(s1, s2) _stricmp(s1, s2)
-    #endif                 /* MinGW 自带 strcasecmp，无需定义 */
+    #endif                 /* MinGW already has strcasecmp */
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>
@@ -53,22 +55,20 @@
 #endif
 
 /* ============================================================
- * 常量定义
+ * Constants
  * ============================================================ */
-#define DNS_PORT        53          /* DNS 标准端口 */
-#define BUFFER_SIZE     1024        /* 接收/发送缓冲区 */
-
-#define MAX_TABLE       1024        /* 本地域名表最大条数 */
-#define DOMAIN_MAX      256         /* 域名最大长度 */
-#define IP_STR_MAX      16          /* IP 字符串最大长度 */
-
-#define MAX_CLIENTS     128         /* 最大并发客户端数 */
-#define TIMEOUT_SEC     5           /* 等待外部DNS响应的超时时间(秒) */
+#define DNS_PORT        53
+#define BUFFER_SIZE     1024
+#define MAX_TABLE       1024
+#define DOMAIN_MAX      256
+#define IP_STR_MAX      16
+#define MAX_CLIENTS     128
+#define TIMEOUT_SEC     5
 
 /* ============================================================
- * 调试级别定义 (全局变量)
+ * Debug level (global)
  * ============================================================ */
-int debug_level = 0;    /* 0=无调试, 1=基本信息, 2=冗长 */
+int debug_level = 0;    /* 0=none, 1=basic, 2=verbose */
 
 #define DEBUG1(fmt, ...) \
     do { if (debug_level >= 1) { printf("[DEBUG1] " fmt "\n", ##__VA_ARGS__); } } while (0)
@@ -77,78 +77,71 @@ int debug_level = 0;    /* 0=无调试, 1=基本信息, 2=冗长 */
     do { if (debug_level >= 2) { printf("[DEBUG2] " fmt "\n", ##__VA_ARGS__); } } while (0)
 
 /* ============================================================
- * DNS 报文结构 (RFC 1035)
+ * DNS Packet Structures (RFC 1035)
  * ============================================================ */
 
-/* DNS 报头 — 12 字节 (使用位域精确匹配) */
+/* DNS Header -- 12 bytes, using bit-fields */
 #pragma pack(push, 1)
 typedef struct {
-    /* 第1-2字节: ID */
-    unsigned short id;
+    unsigned short id;             /* query identification number */
 
-    /* 第3-4字节: 标志位 */
-    unsigned char  rd     : 1;   /* 期望递归 */
-    unsigned char  tc     : 1;   /* 报文截断 */
-    unsigned char  aa     : 1;   /* 权威回答 */
-    unsigned char  opcode : 4;   /* 操作码 */
-    unsigned char  qr     : 1;   /* 0=查询, 1=响应 */
+    unsigned char  rd     : 1;    /* recursion desired */
+    unsigned char  tc     : 1;    /* truncated message */
+    unsigned char  aa     : 1;    /* authoritative answer */
+    unsigned char  opcode : 4;    /* purpose of message */
+    unsigned char  qr     : 1;    /* 0=query, 1=response */
 
-    unsigned char  rcode  : 4;   /* 返回码 */
-    unsigned char  cd     : 1;   /* 禁用验证 */
-    unsigned char  ad     : 1;   /* 认证数据 */
-    unsigned char  z      : 1;   /* 保留 */
-    unsigned char  ra     : 1;   /* 递归可用 */
+    unsigned char  rcode  : 4;    /* response code (0=OK, 3=NXDOMAIN) */
+    unsigned char  cd     : 1;    /* checking disabled */
+    unsigned char  ad     : 1;    /* authentic data */
+    unsigned char  z      : 1;    /* reserved */
+    unsigned char  ra     : 1;    /* recursion available */
 
-    /* 第5-12字节: 计数字段 */
-    unsigned short qdcount;      /* 问题数 */
-    unsigned short ancount;      /* 回答数 */
-    unsigned short nscount;      /* 权威数 */
-    unsigned short arcount;      /* 附加数 */
+    unsigned short qdcount;       /* number of questions */
+    unsigned short ancount;       /* number of answers */
+    unsigned short nscount;       /* number of authority RRs */
+    unsigned short arcount;       /* number of additional RRs */
 } DNS_HEADER;
 #pragma pack(pop)
 
-/* DNS 问题部分 (QNAME 是可变长度, 需单独处理) */
-/* QNAME 后面紧跟 QTYPE(2字节) + QCLASS(2字节) */
-
-/* DNS 资源记录 (固定部分 + RDATA 可变) */
+/* DNS Resource Record (fixed part + variable RDATA) */
 #pragma pack(push, 1)
 typedef struct {
-    unsigned short type;         /* RR类型: 1=A, 5=CNAME, 15=MX ... */
-    unsigned short dclass;       /* 类别, 通常为 1 (IN) */
-    unsigned int   ttl;          /* 生存时间(秒) */
-    unsigned short rdlength;     /* RDATA 长度 */
-    /* RDATA 紧随其后, 通过指针访问 */
+    unsigned short type;          /* 1=A, 5=CNAME, 15=MX ... */
+    unsigned short dclass;        /* usually 1 (IN) */
+    unsigned int   ttl;           /* time to live (seconds) */
+    unsigned short rdlength;      /* RDATA length */
 } RR_FIXED;
 #pragma pack(pop)
 
 /* ============================================================
- * 本地域名-IP 对照表
+ * Local domain-IP table
  * ============================================================ */
 typedef struct {
-    char domain[DOMAIN_MAX];     /* 域名 */
-    unsigned int ip;             /* IP地址 (网络字节序) */
-    int is_blocked;              /* 1=拦截(0.0.0.0), 0=正常 */
+    char domain[DOMAIN_MAX];
+    unsigned int ip;              /* network byte order */
+    int is_blocked;               /* 1=blocked (0.0.0.0), 0=normal */
 } DomainEntry;
 
 DomainEntry domain_table[MAX_TABLE];
 int domain_count = 0;
 
 /* ============================================================
- * ID 映射表 (用于多客户端并发)
+ * TID mapping table (for concurrent clients)
  * ============================================================ */
 typedef struct {
-    unsigned short new_id;       /* 发给外部DNS时用的ID */
-    unsigned short orig_id;      /* 客户端原始的ID */
-    struct sockaddr_in client;   /* 原始客户端地址 */
-    int            in_use;       /* 1=该条目正在使用 */
-    time_t         timestamp;    /* 发送时间戳 (用于超时清理) */
+    unsigned short new_id;        /* ID sent to external DNS */
+    unsigned short orig_id;       /* original client ID */
+    struct sockaddr_in client;    /* original client address */
+    int            in_use;
+    time_t         timestamp;     /* send timestamp (for timeout cleanup) */
 } TidMapping;
 
 TidMapping tid_table[MAX_CLIENTS];
 int tid_count = 0;
 
 /* ============================================================
- * 函数声明
+ * Function declarations
  * ============================================================ */
 int  init_winsock(void);
 void cleanup_winsock(void);
@@ -166,7 +159,8 @@ int  wait_ns_response(SOCKET sock, unsigned char *buf, int buf_size,
                       struct sockaddr_in *ns_addr, int timeout_sec);
 int  handle_client_request(SOCKET server_sock, SOCKET ns_sock,
                            const unsigned char *req, int req_len,
-                           struct sockaddr_in *client_addr);
+                           struct sockaddr_in *client_addr,
+                           struct sockaddr_in *ns_addr);
 void print_domain_list(void);
 void cleanup_stale_tids(void);
 unsigned short get_new_tid(unsigned short orig_id,
@@ -176,7 +170,7 @@ int  restore_original(unsigned short new_id,
                       struct sockaddr_in *out_client);
 
 /* ============================================================
- * Socket 初始化
+ * Socket initialization
  * ============================================================ */
 int init_winsock(void)
 {
@@ -198,7 +192,7 @@ void cleanup_winsock(void)
 }
 
 /* ============================================================
- * 加载本地域名-IP对照表
+ * Load local domain-IP table from config file
  * ============================================================ */
 int load_domain_table(const char *filename)
 {
@@ -211,13 +205,12 @@ int load_domain_table(const char *filename)
 
     fp = fopen(filename, "r");
     if (fp == NULL) {
-        printf("警告: 无法打开配置文件 '%s', 仅使用中继模式\n", filename);
+        printf("Warning: cannot open config file '%s', relay-only mode\n", filename);
         return 0;
     }
 
     domain_count = 0;
     while (fgets(line, sizeof(line), fp) && domain_count < MAX_TABLE) {
-        /* 跳过空行和注释 */
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
 
@@ -227,7 +220,6 @@ int load_domain_table(const char *filename)
         if (sscanf(ip_str, "%d.%d.%d.%d", &a, &b, &c, &d) != 4)
             continue;
 
-        /* 构造IP (网络字节序) */
         ip = htonl((a << 24) | (b << 16) | (c << 8) | d);
 
         strncpy(domain_table[domain_count].domain, domain,
@@ -236,17 +228,17 @@ int load_domain_table(const char *filename)
         domain_table[domain_count].is_blocked = (ip == 0);
         domain_count++;
 
-        DEBUG2("加载: %s -> %s (%s)", domain, ip_str,
-               (ip == 0) ? "拦截" : "正常");
+        DEBUG2("Load: %s -> %s (%s)", domain, ip_str,
+               (ip == 0) ? "BLOCK" : "OK");
     }
 
     fclose(fp);
-    printf("已加载 %d 条域名记录\n", domain_count);
+    printf("Loaded %d domain records\n", domain_count);
     return domain_count;
 }
 
 /* ============================================================
- * 域名查询
+ * Domain lookup
  * ============================================================ */
 int search_domain(const char *domain, unsigned int *out_ip)
 {
@@ -255,17 +247,14 @@ int search_domain(const char *domain, unsigned int *out_ip)
         if (strcasecmp(domain, domain_table[i].domain) == 0) {
             *out_ip = domain_table[i].ip;
             return domain_table[i].is_blocked ? 1 : 0;
-            /* 返回 0=正常, 1=拦截 */
         }
     }
-    return -1;  /* 未找到 */
+    return -1;  /* not found */
 }
 
 /* ============================================================
- * 解析 DNS 报文中的域名 (QNAME)
- *
- * DNS 域名编码: 每段前1字节为长度, 以0长度结束
- * 支持指针压缩 (前2字节高2位为11时表示指针)
+ * Parse DNS QNAME (domain name in DNS format)
+ * Supports pointer compression (RFC 1035)
  * ============================================================ */
 void parse_qname(const unsigned char *buf, int buf_len, int offset,
                  char *out_name, int max_len)
@@ -274,8 +263,6 @@ void parse_qname(const unsigned char *buf, int buf_len, int offset,
     int out_pos = 0;
     int jumped = 0;
     int len;
-
-    /* 处理指针时的最大跳转次数, 防止死循环 */
     int jump_count = 0;
 
     while (1) {
@@ -286,21 +273,19 @@ void parse_qname(const unsigned char *buf, int buf_len, int offset,
 
         len = buf[pos];
 
-        /* 指针压缩: 高2位为 11 */
-        if ((len & 0xC0) == 0xC0) {
+        if ((len & 0xC0) == 0xC0) {  /* pointer compression */
             if (pos + 1 >= buf_len) break;
             if (!jumped) {
-                /* 第一次遇到指针, pos仍然指向原始offset之后的结尾 */
                 jumped = 1;
             }
             pos = ((len & 0x3F) << 8) | buf[pos + 1];
 
             jump_count++;
-            if (jump_count > 10) break;  /* 防死循环 */
+            if (jump_count > 10) break;  /* prevent infinite loop */
             continue;
         }
 
-        if (len == 0) break;  /* 域名结束 */
+        if (len == 0) break;  /* end of domain */
 
         pos++;
         if (out_pos > 0 && out_pos < max_len - 1)
@@ -313,15 +298,10 @@ void parse_qname(const unsigned char *buf, int buf_len, int offset,
     }
 
     out_name[out_pos] = '\0';
-
-    if (!jumped) {
-        /* 没有跳转, 则pos在结束符之后 */
-        /* 调用者可以用这个计算QNAME长度 */
-    }
 }
 
 /* ============================================================
- * 将域名编码为DNS格式 (长度+标签+结束符)
+ * Encode domain name to DNS format (length+label)
  * ============================================================ */
 int build_qname(const char *domain, unsigned char *out_buf)
 {
@@ -330,7 +310,6 @@ int build_qname(const char *domain, unsigned char *out_buf)
     int label_start = 0;
     int i;
 
-    /* 先留一个长度字节的位置 */
     pos = 1;
     label_len = 0;
 
@@ -346,25 +325,23 @@ int build_qname(const char *domain, unsigned char *out_buf)
         }
     }
 
-    /* 最后一个标签 */
     out_buf[label_start] = (unsigned char)label_len;
-    /* 结束符 */
     out_buf[pos++] = 0;
 
     return pos;
 }
 
 /* ============================================================
- * 构造 DNS 响应报文
+ * Build DNS response packet
  *
- * 参数:
- *   query      - 客户端发来的查询报文
- *   query_len  - 查询报文长度
- *   response   - 输出缓冲区
- *   rcode      - 返回码 (0=成功, 3=NXDOMAIN)
- *   answer_ip  - 回答的IP地址 (网络字节序), 仅在 rcode==0 时有效
+ * Parameters:
+ *   query     - client query packet
+ *   query_len - query length
+ *   response  - output buffer
+ *   rcode     - response code (0=OK, 3=NXDOMAIN)
+ *   answer_ip - answer IP (network byte order), valid only when rcode==0
  *
- * 返回: 响应报文长度
+ * Returns: response packet length
  * ============================================================ */
 int build_dns_response(const unsigned char *query, int query_len,
                        unsigned char *response, int rcode,
@@ -374,71 +351,67 @@ int build_dns_response(const unsigned char *query, int query_len,
     int qname_len;
     int offset;
 
-    /* 1) 复制并修改报头 */
+    /* copy and modify header */
     memcpy(response, query, sizeof(DNS_HEADER));
-    resp_hdr->qr     = 1;             /* 响应 */
-    resp_hdr->aa     = 1;             /* 权威回答 */
-    resp_hdr->ancount = htons(0);     /* 先置0 */
+    resp_hdr->qr     = 1;
+    resp_hdr->aa     = 1;
+    resp_hdr->ancount = htons(0);
     resp_hdr->nscount = htons(0);
     resp_hdr->arcount = htons(0);
 
     if (rcode == 3) {
-        resp_hdr->rcode = 3;          /* NXDOMAIN */
+        resp_hdr->rcode = 3;       /* NXDOMAIN */
     } else {
         resp_hdr->rcode = 0;
     }
 
-    /* 2) 复制 Question 部分 */
+    /* copy Question section */
     offset = sizeof(DNS_HEADER);
 
-    /* 计算 QNAME 长度 */
+    /* calculate QNAME length */
     {
         int tmp = offset;
         while (tmp < query_len && query[tmp] != 0) {
             if ((query[tmp] & 0xC0) == 0xC0) {
-                /* 指针跳转, 但QNAME一般不是指针 */
                 tmp += 2;
                 break;
             }
             tmp += 1 + query[tmp];
         }
-        tmp += 1; /* 结尾的0 */
+        tmp += 1;
         qname_len = tmp - offset;
     }
 
     memcpy(response + offset, query + offset, qname_len + 4);
-    offset += qname_len + 4;    /* QNAME + QTYPE(2) + QCLASS(2) */
+    offset += qname_len + 4;
 
-    /* 3) 如果 rcode == 0, 添加 Answer 部分 (A记录) */
+    /* add Answer section (A record) if rcode == 0 */
     if (rcode == 0 && answer_ip != 0) {
         RR_FIXED *rr;
 
-        /* 在 Answer 中复用 QNAME (指针 0xC00C 指向报文头部的 QNAME 起始位置) */
         response[offset++] = 0xC0;
-        response[offset++] = 0x0C;  /* 指针指向报文起始+12 (即QNAME) */
+        response[offset++] = 0x0C;  /* pointer to QNAME in header */
 
         rr = (RR_FIXED *)(response + offset);
-        rr->type    = htons(1);      /* A 记录 */
-        rr->dclass  = htons(1);      /* IN */
-        rr->ttl     = htonl(300);    /* TTL = 300秒 */
-        rr->rdlength = htons(4);     /* IPv4 = 4字节 */
+        rr->type    = htons(1);     /* A record */
+        rr->dclass  = htons(1);     /* IN */
+        rr->ttl     = htonl(300);
+        rr->rdlength = htons(4);
         offset += sizeof(RR_FIXED);
 
-        /* RDATA: IP地址 */
         *(unsigned int *)(response + offset) = answer_ip;
         offset += 4;
 
-        resp_hdr->ancount = htons(1);  /* 1条回答 */
+        resp_hdr->ancount = htons(1);
     }
 
     return offset;
 }
 
 /* ============================================================
- * ID 映射表操作
+ * TID mapping operations
  * ============================================================ */
 
-/* 清理超时的 ID 映射条目 */
 void cleanup_stale_tids(void)
 {
     int i;
@@ -447,7 +420,7 @@ void cleanup_stale_tids(void)
     for (i = 0; i < MAX_CLIENTS; i++) {
         if (tid_table[i].in_use &&
             (now - tid_table[i].timestamp) > TIMEOUT_SEC) {
-            DEBUG2("清理超时的TID映射: new_id=%u, orig_id=%u",
+            DEBUG2("Clean stale TID: new_id=%u, orig_id=%u",
                    tid_table[i].new_id, tid_table[i].orig_id);
             tid_table[i].in_use = 0;
             tid_count--;
@@ -455,7 +428,6 @@ void cleanup_stale_tids(void)
     }
 }
 
-/* 分配一个新的 ID, 记录映射关系, 返回新ID */
 unsigned short get_new_tid(unsigned short orig_id,
                            struct sockaddr_in *client)
 {
@@ -466,7 +438,6 @@ unsigned short get_new_tid(unsigned short orig_id,
 
     for (i = 0; i < MAX_CLIENTS; i++) {
         if (!tid_table[i].in_use) {
-            /* 找一个未被使用的新ID */
             while (1) {
                 int conflict = 0;
                 int j;
@@ -488,7 +459,7 @@ unsigned short get_new_tid(unsigned short orig_id,
             tid_table[i].timestamp = time(NULL);
             tid_count++;
 
-            DEBUG2("分配新TID: orig=%u -> new=%u, 客户端 %s:%d",
+            DEBUG2("Alloc TID: orig=%u -> new=%u, client %s:%d",
                    orig_id, next_id,
                    inet_ntoa(client->sin_addr),
                    ntohs(client->sin_port));
@@ -497,11 +468,10 @@ unsigned short get_new_tid(unsigned short orig_id,
         }
     }
 
-    DEBUG1("警告: TID表已满, 无法分配新ID");
-    return orig_id;  /* 回退: 不转换 */
+    DEBUG1("Warning: TID table full, cannot allocate ID");
+    return orig_id;
 }
 
-/* 根据新ID恢复原始ID和客户端地址 */
 int restore_original(unsigned short new_id,
                      unsigned short *out_orig_id,
                      struct sockaddr_in *out_client)
@@ -514,15 +484,15 @@ int restore_original(unsigned short new_id,
             tid_table[i].in_use = 0;
             tid_count--;
 
-            DEBUG2("恢复TID: new=%u -> orig=%u", new_id, *out_orig_id);
-            return 1;  /* 找到 */
+            DEBUG2("Restore TID: new=%u -> orig=%u", new_id, *out_orig_id);
+            return 1;
         }
     }
-    return 0;  /* 未找到 (可能是超时或迟到的响应) */
+    return 0;
 }
 
 /* ============================================================
- * 向外部DNS服务器转发查询
+ * Forward query to external DNS
  * ============================================================ */
 int relay_to_ns(SOCKET sock, struct sockaddr_in *ns_addr,
                 const unsigned char *query, int query_len)
@@ -530,7 +500,7 @@ int relay_to_ns(SOCKET sock, struct sockaddr_in *ns_addr,
     int ret = sendto(sock, (const char *)query, query_len, 0,
                      (struct sockaddr *)ns_addr, sizeof(*ns_addr));
     if (ret == SOCKET_ERROR) {
-        DEBUG1("向外部DNS发送失败, error=%d",
+        DEBUG1("Send to external DNS failed, error=%d",
 #ifdef _WIN32
                WSAGetLastError()
 #else
@@ -543,7 +513,7 @@ int relay_to_ns(SOCKET sock, struct sockaddr_in *ns_addr,
 }
 
 /* ============================================================
- * 等待外部DNS的回复 (带超时)
+ * Wait for external DNS response (with timeout)
  * ============================================================ */
 int wait_ns_response(SOCKET sock, unsigned char *buf, int buf_size,
                      struct sockaddr_in *ns_addr, int timeout_sec)
@@ -561,19 +531,18 @@ int wait_ns_response(SOCKET sock, unsigned char *buf, int buf_size,
 
     ret = select((int)sock + 1, &readfds, NULL, NULL, &tv);
     if (ret == SOCKET_ERROR) {
-        DEBUG1("select() 失败");
+        DEBUG1("select() failed");
         return -1;
     }
     if (ret == 0) {
-        /* 超时 */
-        DEBUG2("等待外部DNS响应超时");
+        DEBUG2("Wait for external DNS response timeout");
         return -2;
     }
 
     ret = recvfrom(sock, (char *)buf, buf_size, 0,
                    (struct sockaddr *)ns_addr, &addr_len);
     if (ret == SOCKET_ERROR) {
-        DEBUG1("recvfrom 外部DNS失败");
+        DEBUG1("recvfrom external DNS failed");
         return -1;
     }
 
@@ -581,13 +550,13 @@ int wait_ns_response(SOCKET sock, unsigned char *buf, int buf_size,
 }
 
 /* ============================================================
- * 显示本地域名表
+ * Display local domain table
  * ============================================================ */
 void print_domain_list(void)
 {
     int i;
-    printf("\n本地域名表 (%d 条):\n", domain_count);
-    printf("  %-30s %-16s %s\n", "域名", "IP地址", "状态");
+    printf("\nDomain table (%d records):\n", domain_count);
+    printf("  %-30s %-16s %s\n", "Domain", "IP Address", "Status");
     printf("  " "------------------------------ ---------------- --------\n");
     for (i = 0; i < domain_count; i++) {
         struct in_addr addr;
@@ -595,33 +564,31 @@ void print_domain_list(void)
         printf("  %-30s %-16s %s\n",
                domain_table[i].domain,
                inet_ntoa(addr),
-               domain_table[i].is_blocked ? "[拦截]" : "[正常]");
+               domain_table[i].is_blocked ? "[BLOCKED]" : "[OK]");
     }
     printf("\n");
 }
 
 /* ============================================================
- * 处理一个客户端的DNS请求
+ * Handle one client DNS request
  * ============================================================ */
 int handle_client_request(SOCKET server_sock, SOCKET ns_sock,
                           const unsigned char *req, int req_len,
-                          struct sockaddr_in *client_addr)
+                          struct sockaddr_in *client_addr,
+                          struct sockaddr_in *ns_addr)
 {
     DNS_HEADER *hdr = (DNS_HEADER *)req;
     char qname[DOMAIN_MAX];
     unsigned int answer_ip;
     unsigned char response[BUFFER_SIZE];
     int resp_len;
-    struct sockaddr_in reply_addr;
     int search_result;
 
-    /* 检查最小长度 */
     if (req_len < (int)sizeof(DNS_HEADER) + 5) {
-        DEBUG1("收到过短的报文, 忽略");
+        DEBUG1("Received short packet, ignored");
         return -1;
     }
 
-    /* 解析查询域名 */
     parse_qname(req, req_len, sizeof(DNS_HEADER), qname, sizeof(qname));
 
     if (debug_level >= 1) {
@@ -630,21 +597,18 @@ int handle_client_request(SOCKET server_sock, SOCKET ns_sock,
                ntohs(hdr->id), qname);
     }
 
-    /* 查询本地表 */
     search_result = search_domain(qname, &answer_ip);
 
     if (search_result >= 0) {
-        /* ===== 本地命中 ===== */
+        /* local hit */
         if (search_result == 1) {
-            /* 拦截 (0.0.0.0) — 返回 NXDOMAIN */
-            DEBUG1("拦截: %s (0.0.0.0)", qname);
+            DEBUG1("BLOCKED: %s (0.0.0.0)", qname);
             resp_len = build_dns_response(req, req_len,
                                           response, 3, 0);
         } else {
-            /* 正常命中 — 直接回复 */
             struct in_addr addr;
             addr.s_addr = answer_ip;
-            DEBUG1("本地命中: %s -> %s", qname, inet_ntoa(addr));
+            DEBUG1("LOCAL HIT: %s -> %s", qname, inet_ntoa(addr));
             resp_len = build_dns_response(req, req_len,
                                           response, 0, answer_ip);
         }
@@ -654,7 +618,7 @@ int handle_client_request(SOCKET server_sock, SOCKET ns_sock,
         return 0;
 
     } else {
-        /* ===== 本地未命中 → 中继模式 ===== */
+        /* relay mode */
         unsigned char relay_req[BUFFER_SIZE];
         int relay_len;
         unsigned short new_id;
@@ -663,34 +627,28 @@ int handle_client_request(SOCKET server_sock, SOCKET ns_sock,
         int ns_reply_len;
         DNS_HEADER *relay_hdr;
 
-        DEBUG1("中继: %s -> 外部DNS", qname);
+        DEBUG1("RELAY: %s -> external DNS", qname);
 
-        /* 分配新TID */
         new_id = get_new_tid(ntohs(hdr->id), client_addr);
 
-        /* 复制查询报文, 替换ID */
         memcpy(relay_req, req, req_len);
         relay_len = req_len;
         relay_hdr = (DNS_HEADER *)relay_req;
         relay_hdr->id = htons(new_id);
 
-        /* 发送到外部DNS */
-        relay_to_ns(ns_sock, &reply_addr, relay_req, relay_len);
+        relay_to_ns(ns_sock, ns_addr, relay_req, relay_len);
 
-        /* 等待回复 */
         ns_reply_len = wait_ns_response(ns_sock, ns_reply,
                                         sizeof(ns_reply),
-                                        &reply_addr, TIMEOUT_SEC);
+                                        ns_addr, TIMEOUT_SEC);
 
         if (ns_reply_len < 0) {
             if (ns_reply_len == -2) {
-                DEBUG1("中继超时: %s", qname);
-                /* 超时的条目已被 cleanup_stale_tids 清理 */
+                DEBUG1("RELAY TIMEOUT: %s", qname);
             }
             return -1;
         }
 
-        /* 恢复原始ID和客户端地址 */
         if (ns_reply_len >= (int)sizeof(DNS_HEADER)) {
             DNS_HEADER *reply_hdr = (DNS_HEADER *)ns_reply;
             unsigned short reply_new_id = ntohs(reply_hdr->id);
@@ -698,23 +656,21 @@ int handle_client_request(SOCKET server_sock, SOCKET ns_sock,
             if (restore_original(reply_new_id, &orig_id, client_addr)) {
                 reply_hdr->id = htons(orig_id);
             } else {
-                /* 可能是迟到的响应, 丢弃 */
-                DEBUG1("丢弃迟到的外部DNS响应 (ID=%u)", reply_new_id);
+                DEBUG1("Discard late external DNS response (ID=%u)", reply_new_id);
                 return -1;
             }
         }
 
-        /* 转发回客户端 */
         sendto(server_sock, (const char *)ns_reply, ns_reply_len, 0,
                (struct sockaddr *)client_addr, sizeof(*client_addr));
 
-        DEBUG2("中继返回: %s (%d bytes)", qname, ns_reply_len);
+        DEBUG2("RELAY RETURNED: %s (%d bytes)", qname, ns_reply_len);
         return 0;
     }
 }
 
 /* ============================================================
- * 主函数
+ * Main function
  * ============================================================ */
 int main(int argc, char *argv[])
 {
@@ -731,14 +687,13 @@ int main(int argc, char *argv[])
     int optval;
     int i;
 
-    /* ---- 解析命令行参数 ---- */
+    /* ---- parse command line arguments ---- */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-d") == 0) {
             debug_level = 1;
         } else if (strcmp(argv[i], "-dd") == 0) {
             debug_level = 2;
         } else if (argv[i][0] != '-') {
-            /* 第一个非选项参数是外部DNS IP */
             strncpy(ns_ip, argv[i], sizeof(ns_ip) - 1);
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 strncpy(config_file, argv[i + 1], sizeof(config_file) - 1);
@@ -748,40 +703,40 @@ int main(int argc, char *argv[])
     }
 
     printf("========================================\n");
-    printf("  DNS中继服务器 v1.0\n");
-    printf("  外部DNS: %s\n", ns_ip);
-    printf("  配置文件: %s\n", config_file);
-    printf("  调试级别: %d\n", debug_level);
+    printf("  DNS Relay Server v1.0\n");
+    printf("  External DNS: %s\n", ns_ip);
+    printf("  Config file: %s\n", config_file);
+    printf("  Debug level: %d\n", debug_level);
     printf("========================================\n");
 
-    /* ---- 初始化 Socket ---- */
+    /* ---- init Winsock ---- */
     if (init_winsock() != 0) {
-        printf("初始化Winsock失败\n");
+        printf("Winsock init failed\n");
         return 1;
     }
 
-    /* ---- 创建 UDP Socket ---- */
+    /* ---- create UDP sockets ---- */
     server_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (server_sock == INVALID_SOCKET) {
-        printf("创建服务器Socket失败\n");
+        printf("Create server socket failed\n");
         cleanup_winsock();
         return 1;
     }
 
     ns_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (ns_sock == INVALID_SOCKET) {
-        printf("创建外部DNS Socket失败\n");
+        printf("Create NS socket failed\n");
         closesocket(server_sock);
         cleanup_winsock();
         return 1;
     }
 
-    /* ---- 设置地址复用 ---- */
+    /* ---- set address reuse ---- */
     optval = 1;
     setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR,
                (const char *)&optval, sizeof(optval));
 
-    /* ---- 绑定服务器 ---- */
+    /* ---- bind server ---- */
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family      = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -789,38 +744,38 @@ int main(int argc, char *argv[])
 
     if (bind(server_sock, (struct sockaddr *)&server_addr,
              sizeof(server_addr)) == SOCKET_ERROR) {
-        printf("绑定端口 %d 失败 (可能已被占用)\n", DNS_PORT);
-        printf("请以管理员身份运行, 或检查端口是否被占用\n");
+        printf("Bind port %d failed (maybe in use)\n", DNS_PORT);
+        printf("Please run as admin, or check port usage\n");
         closesocket(server_sock);
         closesocket(ns_sock);
         cleanup_winsock();
         return 1;
     }
 
-    /* ---- 设置外部DNS地址 ---- */
+    /* ---- set external DNS address ---- */
     memset(&ns_addr, 0, sizeof(ns_addr));
     ns_addr.sin_family      = AF_INET;
     ns_addr.sin_port        = htons(DNS_PORT);
     ns_addr.sin_addr.s_addr = inet_addr(ns_ip);
 
     if (ns_addr.sin_addr.s_addr == INADDR_NONE) {
-        printf("无效的DNS服务器地址: %s\n", ns_ip);
+        printf("Invalid DNS server address: %s\n", ns_ip);
         closesocket(server_sock);
         closesocket(ns_sock);
         cleanup_winsock();
         return 1;
     }
 
-    /* ---- 加载本地域名表 ---- */
+    /* ---- load domain table ---- */
     load_domain_table(config_file);
     if (debug_level >= 1) {
         print_domain_list();
     }
 
-    printf("\nDNS中继服务器已启动, 监听端口 %d ...\n\n", DNS_PORT);
-    printf("提示: 将计算机的DNS设为 127.0.0.1 即可使用本服务\n\n");
+    printf("\nDNS Relay Server started, listening on port %d ...\n\n", DNS_PORT);
+    printf("Hint: Set your DNS to 127.0.0.1 to use this service\n\n");
 
-    /* ---- 主循环: 接收并处理客户端请求 ---- */
+    /* ---- main loop ---- */
     while (1) {
         fd_set readfds;
         struct timeval tv;
@@ -829,24 +784,21 @@ int main(int argc, char *argv[])
         FD_ZERO(&readfds);
         FD_SET(server_sock, &readfds);
 
-        /* 使用 select 实现多路复用, 这也是非忙等待的关键 */
-        tv.tv_sec  = 5;   /* 5秒超时, 用于定期清理TID表 */
+        tv.tv_sec  = 5;
         tv.tv_usec = 0;
 
         ret = select((int)server_sock + 1, &readfds, NULL, NULL, &tv);
 
         if (ret == SOCKET_ERROR) {
-            DEBUG1("select() 错误");
+            DEBUG1("select() error");
             break;
         }
 
         if (ret == 0) {
-            /* 超时: 定期清理过期的TID映射 */
             cleanup_stale_tids();
             continue;
         }
 
-        /* 收到客户端请求 */
         client_len = sizeof(client_addr);
         recv_len = recvfrom(server_sock, (char *)recvbuf,
                             sizeof(recvbuf), 0,
@@ -854,20 +806,20 @@ int main(int argc, char *argv[])
                             &client_len);
 
         if (recv_len == SOCKET_ERROR) {
-            DEBUG1("recvfrom 错误");
+            DEBUG1("recvfrom error");
             continue;
         }
 
         if (recv_len < (int)sizeof(DNS_HEADER)) {
-            continue;  /* 报文太短 */
+            continue;
         }
 
-        /* 处理请求 */
         handle_client_request(server_sock, ns_sock,
-                              recvbuf, recv_len, &client_addr);
+                              recvbuf, recv_len, &client_addr,
+                              &ns_addr);
     }
 
-    /* ---- 清理 ---- */
+    /* ---- cleanup ---- */
     closesocket(server_sock);
     closesocket(ns_sock);
     cleanup_winsock();
