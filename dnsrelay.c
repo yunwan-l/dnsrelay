@@ -36,7 +36,9 @@
     #include <winsock2.h>
     #include <ws2tcpip.h>
     #pragma comment(lib, "ws2_32.lib")
-    #define strcasecmp(s1, s2) _stricmp(s1, s2)
+    #if defined(_MSC_VER)  /* MSVC 需要手动定义 */
+        #define strcasecmp(s1, s2) _stricmp(s1, s2)
+    #endif                 /* MinGW 自带 strcasecmp，无需定义 */
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>
