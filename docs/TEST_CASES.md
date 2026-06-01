@@ -1,126 +1,174 @@
 # 建议测试用例
 
-下面这些测试最好都做，并保存截图或日志，后面写报告和验收都用得上。
+本文件是快速版测试清单。完整的一步步测试流程见：
 
-## 1. 本地命中测试
-
-### 操作
-
-```bat
-nslookup www.baidu.com 127.0.0.1
+```text
+docs/DETAILED_TEST_PLAN.md
 ```
 
-前提是 `dnsrelay.txt` 中确实配置了 `www.baidu.com`。
+验收、截图、写报告时，建议以详细测试方案为准。
 
-### 预期结果
+## 1. 测试前约定
 
-- 程序日志显示“本地命中”
-- 返回的是配置文件里的 IP
+- 测试分支：`develop`
+- 推荐启动命令：`.\dnsrelay.exe -dd 114.114.114.114`
+- 推荐客户端命令格式：`nslookup 域名 127.0.0.1`
+- 如果 `nslookup` 输出里的服务器地址不是 `127.0.0.1`，该次结果不能证明程序通过测试。
+- PowerShell 中运行当前目录程序要写 `.\dnsrelay.exe`，不能只写 `dnsrelay`。
 
-## 2. 拦截测试
+## 2. 编译测试
 
-### 操作
+```powershell
+.\build_mingw.bat
+```
 
-```bat
+或：
+
+```powershell
+gcc -Wall -Wextra -O2 dnsrelay.c dns_protocol.c domain_table.c relay_engine.c -lws2_32 -o dnsrelay.exe
+```
+
+预期：
+
+- 能生成 `dnsrelay.exe`。
+- 没有编译或链接错误。
+
+## 3. 启动测试
+
+```powershell
+.\dnsrelay.exe -dd 114.114.114.114
+```
+
+预期：
+
+- 程序显示启动信息。
+- 外部 DNS 为 `114.114.114.114`。
+- 配置文件为 `dnsrelay.txt`。
+- 监听端口为 `53`。
+
+## 4. 本地命中测试
+
+```powershell
+nslookup test1 127.0.0.1
+nslookup test2 127.0.0.1
+nslookup bupt 127.0.0.1
+```
+
+预期：
+
+- `test1` 返回 `11.111.11.111`。
+- `test2` 返回 `22.22.222.222`。
+- `bupt` 返回 `123.127.134.10`。
+- 服务端日志出现 `本地命中`。
+
+## 5. 拦截测试
+
+```powershell
 nslookup test0 127.0.0.1
+nslookup www.xxx.com 127.0.0.1
 ```
 
-或者换成你们自己准备的、写在配置文件中的拦截域名。
+预期：
 
-### 预期结果
+- 客户端显示查询失败或域名不存在。
+- 服务端日志出现 `本地拦截` 和 `NXDOMAIN`。
+- 不应返回真实公网 IP。
 
-- 程序日志显示“本地拦截”
-- 客户端收到域名不存在或查找失败
-- 响应码为 `NXDOMAIN`
+## 6. 中继测试
 
-## 3. 中继测试
-
-### 操作
-
-```bat
-nslookup www.bupt.edu.cn 127.0.0.1
-```
-
-要求该域名不在本地表中。
-
-### 预期结果
-
-- 程序日志显示“中继查询”
-- 能收到上游 DNS 返回的结果
-
-## 4. 并发测试
-
-### 操作
-
-快速发起多个查询，例如连续执行：
-
-```bat
+```powershell
 nslookup www.baidu.com 127.0.0.1
 nslookup www.qq.com 127.0.0.1
-nslookup www.bing.com 127.0.0.1
+nslookup www.microsoft.com 127.0.0.1
 ```
 
-也可以在多个终端同时发起。
+预期：
 
-### 预期结果
+- 客户端能收到公网 IP。
+- 服务端日志出现 `中继查询`。
+- `-dd` 模式下能看到 `中继返回成功`。
 
-- 程序不中断
-- 多个查询都能被处理
-- 不会因为第一个未返回就卡死后面的请求
+## 7. 混合压力测试
 
-## 5. 超时测试
-
-### 操作
-
-启动时指定一个不可用或不存在的上游 DNS：
-
-```bat
-dnsrelay -d 10.255.255.1
+```powershell
+for ($i=1; $i -le 5; $i++) {
+    nslookup bupt 127.0.0.1
+    nslookup www.xxx.com 127.0.0.1
+    nslookup www.baidu.com 127.0.0.1
+}
 ```
 
-然后查询一个本地表中不存在的域名。
+预期：
 
-### 预期结果
+- 共 15 次查询。
+- 本地命中、拦截、中继三种路径都正确。
+- 程序不崩溃。
 
-- 程序日志显示“上游DNS超时”
-- 客户端最终收到 `SERVFAIL`
-- 超时条目会从映射表中清理掉
+## 8. 并发测试
 
-## 6. 迟到响应测试
+打开多个 VS Code 终端，同时执行：
 
-### 思路
+```powershell
+for ($i=1; $i -le 10; $i++) { nslookup www.baidu.com 127.0.0.1 }
+```
 
-先人为制造超时，再观察后续迟到包是否会被程序丢弃。
+```powershell
+for ($i=1; $i -le 10; $i++) { nslookup www.qq.com 127.0.0.1 }
+```
 
-### 预期结果
+```powershell
+for ($i=1; $i -le 10; $i++) { nslookup www.microsoft.com 127.0.0.1 }
+```
 
-- 程序识别为“迟到响应”
-- 不会误发给错误的客户端
+预期：
 
-## 7. 非 A 类型测试
+- 多个终端都能陆续得到响应。
+- 服务端不中断、不崩溃。
+- 日志能看到多次 `中继查询` 和 `中继返回成功`。
 
-### 操作
+## 9. 超时测试
 
-用系统或工具查询 AAAA 记录，例如：
+服务端启动：
 
-```bat
+```powershell
+.\dnsrelay.exe -dd 192.0.2.1
+```
+
+客户端测试：
+
+```powershell
+nslookup www.baidu.com 127.0.0.1
+```
+
+预期：
+
+- 服务端日志出现 `上游DNS超时`。
+- 客户端最终查询失败或收到 `SERVFAIL`。
+- 程序不崩溃。
+
+## 10. 非 A 类型测试
+
+```powershell
+nslookup -type=AAAA bupt 127.0.0.1
 nslookup -type=AAAA www.baidu.com 127.0.0.1
 ```
 
-### 预期结果
+预期：
 
-- 如果本地命中但不是 A 类型，程序返回空回答而不是构造错误 A 记录
-- 程序不崩溃
+- 程序不崩溃。
+- 本地命中的非 A 查询不会被错误构造成 A 记录。
 
-## 8. 缓存影响测试
+## 11. 结果记录
 
-### 操作
+建议每类测试至少保存一张截图：
 
-```bat
-ipconfig /flushdns
-ipconfig /displaydns
-```
+- 编译成功截图。
+- 程序启动截图。
+- 本地命中截图。
+- 拦截截图。
+- 中继截图。
+- 并发或压力测试截图。
+- 超时测试截图。
 
-### 说明
+更完整的记录表见 `docs/DETAILED_TEST_PLAN.md`。
 
-很多时候“程序明明改了但查询结果没变”，其实是系统 DNS 缓存造成的。验收前一定记得清缓存。
