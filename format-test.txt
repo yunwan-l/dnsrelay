@@ -1,0 +1,4 @@
+1.1.1.1 ipfirst
+domainfirst 2.2.2.2
+0.0.0.0 block-ipfirst
+block-domainfirst 0.0.0.0

@@ -1,0 +1,34 @@
+
+=== DNS Relay started at Wed Jun  3 23:23:35 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : dnsrelay.txt (198 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1780500224] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1780500224] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1780500224] REPLY  forwarded (cached)
+[1780500224] QUERY  ID=2, A test1
+[1780500224] HIT    test1 -> 11.111.11.111
+[1780500224] QUERY  ID=3, AAAA test1
+[1780500224] RELAY  test1 -> 8.8.8.8
+[1780500224] REPLY  forwarded (cached)
+[1780500228] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1780500228] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1780500228] REPLY  forwarded (cached)
+[1780500228] QUERY  ID=2, A 008.cn
+[1780500228] BLOCK  008.cn
+[1780500228] QUERY  ID=3, AAAA 008.cn
+[1780500228] BLOCK  008.cn
+[1780500228] QUERY  ID=4, A 008.cn
+[1780500228] BLOCK  008.cn
+[1780500228] QUERY  ID=5, AAAA 008.cn
+[1780500228] BLOCK  008.cn
