@@ -10,7 +10,16 @@ static int has_failed_over = 0;
 
 static int parse_ipv4_addr(const char *ip_str, struct in_addr *out_addr)
 {
-    return inet_pton(AF_INET, ip_str, out_addr) == 1;
+    unsigned char bytes[4];
+
+    if (ip_str_to_bytes(ip_str, bytes) != 0)
+        return 0;
+
+    out_addr->s_addr = htonl(((uint32_t)bytes[0] << 24) |
+                             ((uint32_t)bytes[1] << 16) |
+                             ((uint32_t)bytes[2] << 8) |
+                             (uint32_t)bytes[3]);
+    return 1;
 }
 
 static int is_test_net_addr(struct in_addr addr)

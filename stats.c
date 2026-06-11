@@ -2,6 +2,7 @@
  * stats.c -- 运行统计实现
  */
 #include "stats.h"
+#include <inttypes.h>
 
 Stats g_stats;
 
@@ -25,13 +26,13 @@ void stats_print(void)
     printf("========================================\n");
     printf("  Uptime        : %02d:%02d:%02d\n", hours, minutes, seconds);
     printf("----------------------------------------\n");
-    printf("  Total queries : %-10llu\n", (unsigned long long)g_stats.total_queries);
-    printf("  Local hits    : %-10llu\n", (unsigned long long)g_stats.local_hits);
-    printf("  Cache hits    : %-10llu\n", (unsigned long long)g_stats.cache_hits);
-    printf("  Blocked       : %-10llu\n", (unsigned long long)g_stats.blocked);
-    printf("  Relayed       : %-10llu\n", (unsigned long long)g_stats.relayed);
-    printf("  Relay OK      : %-10llu\n", (unsigned long long)g_stats.relay_responses);
-    printf("  Relay timeouts: %-10llu\n", (unsigned long long)g_stats.relay_timeouts);
-    printf("  Errors        : %-10llu\n", (unsigned long long)g_stats.errors);
+    printf("  Total queries : %-10" PRIu64 "\n", g_stats.total_queries);
+    printf("  Local hits    : %-10" PRIu64 "\n", g_stats.local_hits);
+    printf("  Cache hits    : %-10" PRIu64 "\n", g_stats.cache_hits);
+    printf("  Blocked       : %-10" PRIu64 "\n", g_stats.blocked);
+    printf("  Relayed       : %-10" PRIu64 "\n", g_stats.relayed);
+    printf("  Relay OK      : %-10" PRIu64 "\n", g_stats.relay_responses);
+    printf("  Relay timeouts: %-10" PRIu64 "\n", g_stats.relay_timeouts);
+    printf("  Errors        : %-10" PRIu64 "\n", g_stats.errors);
     printf("========================================\n\n");
 }

@@ -32,3 +32,191 @@
 [1780500228] BLOCK  008.cn
 [1780500228] QUERY  ID=5, AAAA 008.cn
 [1780500228] BLOCK  008.cn
+
+=== DNS Relay started at Thu Jun 11 16:52:42 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : dnsrelay.txt (198 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1781168129] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781168129] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781168129] REPLY  forwarded (cached)
+[1781168129] QUERY  ID=2, A www.google.com
+[1781168129] RELAY  www.google.com -> 8.8.8.8
+[1781168129] REPLY  forwarded (cached)
+[1781168138] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781168138] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781168138] REPLY  forwarded (cached)
+[1781168138] QUERY  ID=2, AAAA www.google.com
+[1781168138] RELAY  www.google.com -> 8.8.8.8
+[1781168138] REPLY  forwarded (cached)
+
+=== DNS Relay started at Thu Jun 11 17:24:22 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : format-test.txt (5 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1781169878] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781169878] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781169878] REPLY  forwarded (cached)
+[1781169878] QUERY  ID=2, A example.com
+[1781169878] BLOCK  example.com
+[1781169878] QUERY  ID=3, AAAA example.com
+[1781169878] BLOCK  example.com
+[1781169878] QUERY  ID=4, A example.com
+[1781169878] BLOCK  example.com
+[1781169878] QUERY  ID=5, AAAA example.com
+[1781169878] BLOCK  example.com
+
+--- Detected config file change, reloading ---
+--- Reload complete (4 records) ---
+
+[1781169895] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781169895] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781169895] REPLY  forwarded (cached)
+[1781169895] QUERY  ID=2, A example.com
+[1781169895] RELAY  example.com -> 8.8.8.8
+[1781169895] REPLY  forwarded (cached)
+[1781169895] QUERY  ID=3, AAAA example.com
+[1781169895] RELAY  example.com -> 8.8.8.8
+[1781169895] REPLY  forwarded (cached)
+
+=== DNS Relay started at Thu Jun 11 17:29:35 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : format-test.txt (4 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1781170215] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170215] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170215] REPLY  forwarded (cached)
+[1781170215] QUERY  ID=2, A ipfirst
+[1781170215] HIT    ipfirst -> 1.1.1.1
+[1781170215] QUERY  ID=3, AAAA ipfirst
+[1781170215] RELAY  ipfirst -> 8.8.8.8
+[1781170216] REPLY  forwarded (cached)
+[1781170268] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170268] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170268] REPLY  forwarded (cached)
+[1781170268] QUERY  ID=2, A example
+[1781170268] RELAY  example -> 8.8.8.8
+[1781170269] REPLY  forwarded (cached)
+[1781170269] QUERY  ID=3, AAAA example
+[1781170269] RELAY  example -> 8.8.8.8
+[1781170269] REPLY  forwarded (cached)
+
+=== DNS Relay started at Thu Jun 11 17:35:06 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : format-test.txt (4 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1781170529] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170529] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170529] REPLY  forwarded (cached)
+[1781170529] QUERY  ID=2, A example.com
+[1781170529] RELAY  example.com -> 8.8.8.8
+[1781170529] REPLY  forwarded (cached)
+[1781170529] QUERY  ID=3, AAAA example.com
+[1781170529] RELAY  example.com -> 8.8.8.8
+[1781170530] REPLY  forwarded (cached)
+
+--- Detected config file change, reloading ---
+--- Reload complete (5 records) ---
+
+[1781170585] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170585] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170586] REPLY  forwarded (cached)
+[1781170586] QUERY  ID=2, A example.com
+[1781170586] BLOCK  example.com
+[1781170586] QUERY  ID=3, AAAA example.com
+[1781170586] BLOCK  example.com
+[1781170586] QUERY  ID=4, A example.com
+[1781170586] BLOCK  example.com
+[1781170586] QUERY  ID=5, AAAA example.com
+[1781170586] BLOCK  example.com
+
+--- Detected config file change, reloading ---
+--- Reload complete (5 records) ---
+
+[1781170598] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170598] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170598] REPLY  forwarded (cached)
+[1781170598] QUERY  ID=2, A example.com
+[1781170598] HIT    example.com -> 3.3.3.3
+[1781170598] QUERY  ID=3, AAAA example.com
+[1781170598] RELAY  example.com -> 8.8.8.8
+[1781170599] REPLY  forwarded (cached)
+[1781170786] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781170786] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781170786] REPLY  forwarded (cached)
+[1781170786] QUERY  ID=2, A example.com
+[1781170786] HIT    example.com -> 3.3.3.3
+
+=== DNS Relay started at Thu Jun 11 19:15:02 2026
+
+========================================
+  DNS Relay Server v2.0
+========================================
+  Listening   : port 53 (0.0.0.0)
+  Upstream    : 8.8.8.8:53
+  Config file : dnsrelay.txt (198 records)
+  Max clients : 256
+  DNS cache   : 512 entries
+  Debug level : 1
+  Log file    : run.log
+========================================
+
+[1781176508] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781176508] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781176508] REPLY  forwarded (cached)
+[1781176508] QUERY  ID=2, A test1
+[1781176508] HIT    test1 -> 11.111.11.111
+[1781176508] QUERY  ID=3, AAAA test1
+[1781176508] RELAY  test1 -> 8.8.8.8
+[1781176508] REPLY  forwarded (cached)
+[1781176514] QUERY  ID=1, A 1.0.0.127.in-addr.arpa
+[1781176514] RELAY  1.0.0.127.in-addr.arpa -> 8.8.8.8
+[1781176514] REPLY  forwarded (cached)
+[1781176514] QUERY  ID=2, A 008.cn
+[1781176514] BLOCK  008.cn
+[1781176514] QUERY  ID=3, AAAA 008.cn
+[1781176514] BLOCK  008.cn
+[1781176514] QUERY  ID=4, A 008.cn
+[1781176514] BLOCK  008.cn
+[1781176514] QUERY  ID=5, AAAA 008.cn
+[1781176514] BLOCK  008.cn

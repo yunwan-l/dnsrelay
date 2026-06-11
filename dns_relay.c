@@ -28,6 +28,11 @@
 #include "dns_cache.h"
 #include "upstream.h"
 #include "stats.h"
+#include "config_reload.h"
+
+#ifdef _WIN32
+#include <conio.h>
+#endif
 
 /* 全局调试等级：0无调试，1基础日志，2详细日志。 */
 int debug_level = 0;
@@ -76,18 +81,7 @@ static int set_nonblocking(SOCKET s)
 #endif
 }
 
-/* Linux热重载：收到SIGHUP后在主循环中重新加载域名表。 */
-#ifndef _WIN32
-#include <signal.h>
-static volatile int g_reload_requested = 0;
-
-static void sighup_handler(int signo)
-{
-    (void)signo;
-    g_reload_requested = 1;
-}
-#endif
-
+/* 读取文件修改时间，失败返回-1。 */
 /* 打印命令行帮助。 */
 static void print_usage(const char *prog)
 {
@@ -103,18 +97,34 @@ static void print_usage(const char *prog)
     printf("  dnsrelay -d 8.8.8.8,114.114.114.114\n");
     printf("  Default: 202.106.0.20\n");
     printf("\n");
-    printf("Runtime (Linux):\n");
-    printf("  Press 's' + Enter  -> Print statistics\n");
-    printf("  Press 'c' + Enter  -> Clear DNS cache\n");
-    printf("  kill -HUP <pid>    -> Reload domain table\n");
+    printf("Runtime:\n");
+    printf("  Press 's'          -> Print statistics\n");
+    printf("  Press 'c'          -> Clear DNS cache\n");
+    printf("  Press 'r'          -> Reload domain table\n");
+    printf("  Save config file   -> Auto reload when file changes\n");
+    printf("  kill -HUP <pid>    -> Reload domain table (Linux)\n");
 }
 
 /* Linux下非阻塞读取标准输入，用于运行时统计和清缓存命令。 */
-#ifndef _WIN32
 static int try_read_stdin(void)
 {
+#ifdef _WIN32
+    int c;
+
+    if (!_kbhit())
+        return -1;
+
+    c = _getch();
+    if (c == 0 || c == 224) {
+        if (_kbhit())
+            (void)_getch();
+        return -1;
+    }
+    return c;
+#else
     fd_set rfds;
     struct timeval tv = {0, 0};
+
     FD_ZERO(&rfds);
     FD_SET(STDIN_FILENO, &rfds);
     if (select(STDIN_FILENO + 1, &rfds, NULL, NULL, &tv) <= 0)
@@ -124,8 +134,8 @@ static int try_read_stdin(void)
     if (read(STDIN_FILENO, &c, 1) == 1)
         return (unsigned char)c;
     return -1;
-}
 #endif
+}
 
 /* 从DNS报文中安全提取查询域名，用于日志和超时处理。 */
 static void extract_qname(const unsigned char *packet, int len,
@@ -377,6 +387,7 @@ int main(int argc, char *argv[])
         cleanup_winsock();
         return 1;
     }
+    runtime_reload_mark_loaded(config_file);
 
     tid_map_init();
     dns_cache_init();
@@ -418,15 +429,8 @@ int main(int argc, char *argv[])
     if (debug_level >= 2)
         domain_table_print();
 
-    /* Linux下注册SIGHUP处理函数，用于热重载域名表。 */
-#ifndef _WIN32
-    {
-        struct sigaction sa;
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = sighup_handler;
-        sigaction(SIGHUP, &sa, NULL);
-    }
-#endif
+    /* 运行时重载钩子：Linux支持SIGHUP，Windows依靠文件时间戳轮询。 */
+    runtime_reload_setup();
 
     /* 创建本地DNS服务socket，监听UDP 53端口。 */
     server_sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -484,8 +488,9 @@ int main(int argc, char *argv[])
             LOG("  Log file    : %s\n", log_file);
 #ifndef _WIN32
         LOG("  PID         : %d\n", getpid());
-        LOG("  Hot reload  : kill -HUP %d\n", getpid());
-        LOG("  Stats       : press 's' + Enter\n");
+    LOG("  Hot reload  : kill -HUP %d\n", getpid());
+    LOG("  Hot reload  : press 'r' to reload config now\n");
+    LOG("  Stats       : press 's' to print statistics\n");
 #endif
         LOG("========================================\n\n");
     }
@@ -504,13 +509,7 @@ int main(int argc, char *argv[])
         FD_ZERO(&readfds);
         FD_SET(server_sock, &readfds);
         FD_SET(ns_sock, &readfds);
-#ifndef _WIN32
-        FD_SET(STDIN_FILENO, &readfds);
-#endif
         max_fd = (server_sock > ns_sock) ? (int)server_sock : (int)ns_sock;
-#ifndef _WIN32
-        if (STDIN_FILENO > max_fd) max_fd = STDIN_FILENO;
-#endif
         max_fd++;
 
         tv.tv_sec  = 1;
@@ -525,8 +524,10 @@ int main(int argc, char *argv[])
             DEBUG1("select() error: %d", err);
 #else
             if (errno == EINTR) {
-                if (g_reload_requested)
-                    goto handle_reload;
+                if (g_reload_requested) {
+                    runtime_reload_force(config_file, g_logfile,
+                        "\n--- Reloading domain table from SIGHUP ---");
+                }
                 continue;
             }
             DEBUG1("select() error: %d", errno);
@@ -536,17 +537,10 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        /* select超时tick：检查中继超时并清理过期缓存。 */
-        if (sel_ret == 0) {
-            handle_relay_timeouts(server_sock, ns_sock);
-            dns_cache_cleanup();
-            goto handle_reload_check;
-        }
-
-        /* Linux运行时命令：s打印统计，c清空缓存。 */
-#ifndef _WIN32
-        if (FD_ISSET(STDIN_FILENO, &readfds)) {
+        /* 运行时命令：s打印统计，c清空缓存，r强制重载配置。 */
+        {
             int c = try_read_stdin();
+
             if (c == 's' || c == 'S') {
                 stats_print();
                 printf("  Active TIDs   : %d / %d\n",
@@ -559,9 +553,18 @@ int main(int argc, char *argv[])
             } else if (c == 'c' || c == 'C') {
                 dns_cache_free();
                 printf("[CMD] DNS cache cleared.\n");
+            } else if (c == 'r' || c == 'R') {
+                runtime_reload_force(config_file, g_logfile,
+                                     "\n--- Reloading domain table by command ---");
             }
         }
-#endif
+
+        /* select超时tick：检查中继超时并清理过期缓存。 */
+        if (sel_ret == 0) {
+            handle_relay_timeouts(server_sock, ns_sock);
+            dns_cache_cleanup();
+            goto handle_reload_check;
+        }
 
         /* 处理客户端DNS查询。 */
         if (FD_ISSET(server_sock, &readfds)) {
@@ -729,19 +732,8 @@ int main(int argc, char *argv[])
         }
 
 handle_reload_check:
-#ifndef _WIN32
-        if (g_reload_requested) {
-handle_reload:
-            g_reload_requested = 0;
-            LOG("\n--- Reloading domain table from %s ---\n", config_file);
-            domain_table_free();
-            if (domain_table_load(config_file) < 0) {
-                LOG("[ERROR] Reload failed!\n");
-            }
-            dns_cache_free();
-            LOG("--- Reload complete (%d records) ---\n\n", domain_count);
-        }
-#endif
+    ;
+    runtime_reload_poll(config_file, g_logfile);
     }
 
     /* 正常情况下不会执行到这里。 */

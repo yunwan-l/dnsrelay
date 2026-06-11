@@ -27,7 +27,9 @@ static int parse_ipv4(const char *text, uint32_t *out_ip)
     return 1;
 }
 
-int domain_table_load(const char *filename)
+static int load_table_into(const char *filename,
+                           DomainEntry *table,
+                           int *table_count)
 {
     FILE *fp;
     char line[512];
@@ -36,6 +38,7 @@ int domain_table_load(const char *filename)
     char domain[DOMAIN_MAX];
     char ip_str[IP_STR_MAX];
     int line_no = 0;
+    int count = 0;
 
     fp = fopen(filename, "r");
     if (!fp) {
@@ -43,9 +46,7 @@ int domain_table_load(const char *filename)
         return -1;
     }
 
-    domain_count = 0;
-
-    while (fgets(line, sizeof(line), fp) && domain_count < MAX_TABLE) {
+    while (fgets(line, sizeof(line), fp) && count < MAX_TABLE) {
         char *p;
         uint32_t parsed_ip;
 
@@ -93,28 +94,57 @@ int domain_table_load(const char *filename)
             continue;
         }
 
-        strncpy(domain_table[domain_count].domain, domain, DOMAIN_MAX - 1);
-        domain_table[domain_count].domain[DOMAIN_MAX - 1] = '\0';
+        strncpy(table[count].domain, domain, DOMAIN_MAX - 1);
+        table[count].domain[DOMAIN_MAX - 1] = '\0';
 
-        strncpy(domain_table[domain_count].ip_str, ip_str, IP_STR_MAX - 1);
-        domain_table[domain_count].ip_str[IP_STR_MAX - 1] = '\0';
+        strncpy(table[count].ip_str, ip_str, IP_STR_MAX - 1);
+        table[count].ip_str[IP_STR_MAX - 1] = '\0';
 
-        domain_table[domain_count].is_blocked =
+        table[count].is_blocked =
             (strcmp(ip_str, "0.0.0.0") == 0) ? 1 : 0;
-        domain_table[domain_count].ip = parsed_ip;
-        ip_str_to_bytes(ip_str, domain_table[domain_count].addr);
+        table[count].ip = parsed_ip;
+        ip_str_to_bytes(ip_str, table[count].addr);
 
         DEBUG2("Load[%d]: %s -> %s (%s)",
-               domain_count + 1,
+               count + 1,
                domain,
                ip_str,
-               domain_table[domain_count].is_blocked ? "BLOCK" : "OK");
+               table[count].is_blocked ? "BLOCK" : "OK");
 
-        domain_count++;
+        count++;
     }
 
     fclose(fp);
-    printf("Loaded %d domain records from %s\n", domain_count, filename);
+    if (table_count)
+        *table_count = count;
+    printf("Loaded %d domain records from %s\n", count, filename);
+    return count;
+}
+
+int domain_table_load(const char *filename)
+{
+    int count = 0;
+
+    domain_count = 0;
+    if (load_table_into(filename, domain_table, &count) < 0)
+        return -1;
+
+    domain_count = count;
+    return domain_count;
+}
+
+int domain_table_reload(const char *filename)
+{
+    DomainEntry new_table[MAX_TABLE];
+    int new_count = 0;
+
+    memset(new_table, 0, sizeof(new_table));
+    if (load_table_into(filename, new_table, &new_count) < 0)
+        return -1;
+
+    memset(domain_table, 0, sizeof(domain_table));
+    memcpy(domain_table, new_table, sizeof(DomainEntry) * (size_t)new_count);
+    domain_count = new_count;
     return domain_count;
 }
 

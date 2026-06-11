@@ -1,10 +1,14 @@
 @echo off
 setlocal
 
-gcc -Wall -Wextra -O2 -std=c99 -Wno-stringop-truncation ^
+if not defined CC set "CC=gcc"
+if not defined CFLAGS set "CFLAGS=-Wall -Wextra -O2 -std=c99 -Wno-stringop-truncation"
+if not defined LDFLAGS set "LDFLAGS="
+
+"%CC%" %CFLAGS% ^
     -o dnsrelay.exe ^
-    dns_relay.c dns_table.c tid_map.c dns_packet.c dns_cache.c stats.c upstream.c ^
-    -lws2_32
+    dns_relay.c config_reload.c dns_table.c tid_map.c dns_packet.c dns_cache.c stats.c upstream.c ^
+    %LDFLAGS% -lws2_32
 
 if errorlevel 1 (
     echo Build failed.

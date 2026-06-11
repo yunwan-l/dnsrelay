@@ -8,11 +8,11 @@
 #   make clean        Remove build artifacts
 #
 
-CC      = gcc
+CC      ?= gcc
 CFLAGS  = -Wall -Wextra -O2 -std=c99 -Wno-stringop-truncation
 LDFLAGS =
 
-SRCS    = dns_relay.c dns_table.c tid_map.c dns_packet.c dns_cache.c stats.c upstream.c
+SRCS    = dns_relay.c config_reload.c dns_table.c tid_map.c dns_packet.c dns_cache.c stats.c upstream.c
 OBJS    = $(SRCS:.c=.o)
 TARGET  = dnsrelay
 

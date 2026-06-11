@@ -31,6 +31,14 @@ extern int domain_count;
 int domain_table_load(const char *filename);
 
 /*
+ * 重新加载域名表。
+ * 采用“先加载到临时表，成功后再替换全局表”的方式，
+ * 这样即使配置文件写到一半，旧表也不会被破坏。
+ * 返回成功加载的记录数，失败返回-1。
+ */
+int domain_table_reload(const char *filename);
+
+/*
  * 在表中查找域名，大小写不敏感。
  * 返回值： 1 = 命中拦截记录
  *          0 = 命中普通IP，结果写入 *out_ip
