@@ -13,6 +13,7 @@
 #include <time.h>
 #include <stdint.h>
 
+//跨平台Socket适配
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>

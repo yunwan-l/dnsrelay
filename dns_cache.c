@@ -5,7 +5,7 @@
  */
 #include "dns_cache.h"
 
-/* FNV-1a 32位哈希，用于把缓存key映射到起始槽位。 */
+/* FNV-1a 32位哈希，用于把缓存key变为数字，映射到起始槽位。 */
 static uint32_t hash_str(const char *s)
 {
     uint32_t h = 2166136261u;
@@ -19,18 +19,18 @@ static uint32_t hash_str(const char *s)
 
 /* 单个缓存项，保存完整DNS响应报文。 */
 typedef struct {
-    int     in_use;
-    char    key[DNS_CACHE_KEY_MAX];
-    uint8_t data[BUFFER_SIZE];
-    int     data_len;
-    time_t  expiry;       /* 绝对过期时间 */
-    time_t  insert_time;  /* 插入时间，用于淘汰旧项 */
+    int     in_use;//槽位是否被占用
+    char    key[DNS_CACHE_KEY_MAX];//缓存key（域名|QTYPE|QCLASS）
+    uint8_t data[BUFFER_SIZE];//完整DNS响应报文
+    int     data_len;//报文长度
+    time_t  expiry;       /* 绝对过期时间 （time(NULL) + TTL）*/
+    time_t  insert_time;  /* 插入时间，用于缓存满了淘汰时用，淘汰最早的 */
 } CacheEntry;
 
-static CacheEntry cache[DNS_CACHE_MAX];
-static int        cache_count = 0;
+static CacheEntry cache[DNS_CACHE_MAX];//缓存表
+static int        cache_count = 0;//当前有效缓存项数量
 
-/* 初始化缓存表。 */
+/* 初始化缓存表 */
 void dns_cache_init(void)
 {
     int i;
@@ -49,7 +49,7 @@ void dns_cache_put(const char *cache_key,
     int i;
 
     if (response_len <= 0 || response_len > BUFFER_SIZE)
-        return;
+        return;//响应报文长度不合法
 
     /* 先通过哈希找到线性探测的起始位置。 */
     uint32_t idx = hash_str(cache_key) % DNS_CACHE_MAX;
@@ -69,7 +69,7 @@ void dns_cache_put(const char *cache_key,
     if (first_empty >= 0) {
         slot = first_empty;
         goto store;
-    }
+    }//没有找到同key项，但有空槽，存入第一个空槽
 
     /* 缓存满时淘汰最早插入的项。 */
     {
@@ -88,12 +88,13 @@ void dns_cache_put(const char *cache_key,
         goto store;
     }
 
+    //写入 5 样东西： key、完整报文、报文长度、过期时间、插入时间。
 store:
     strncpy(cache[slot].key, cache_key, DNS_CACHE_KEY_MAX - 1);
     cache[slot].key[DNS_CACHE_KEY_MAX - 1] = '\0';
     memcpy(cache[slot].data, response, response_len);
     cache[slot].data_len = response_len;
-    cache[slot].expiry    = time(NULL) + (time_t)ttl;
+    cache[slot].expiry = time(NULL) + (time_t)ttl;
     cache[slot].insert_time = time(NULL);
 
     if (!cache[slot].in_use) {

@@ -181,10 +181,11 @@ static void make_cache_key(char *out, int out_size, const char *qname,
              qname, (unsigned)qtype, (unsigned)qclass);
 }
 
-/* 替换DNS ID后把查询发给当前上游DNS。 */
-static int send_packet_to_upstream(SOCKET ns_sock,
-                                   const unsigned char *query, int query_len,
-                                   uint16_t new_id)
+/* 把客户端的原始查询报文，ID 替换成新分配的 ID，然后发送给当前上游 DNS 服务器 */
+static int send_packet_to_upstream(SOCKET ns_sock,//上游socket
+                                   const unsigned char *query,//原始查询报文
+                                    int query_len,//报文长度
+                                   uint16_t new_id)//分配的上游ID
 {
     unsigned char relay_buf[BUFFER_SIZE];
     DNS_HEADER *relay_hdr;
@@ -193,27 +194,24 @@ static int send_packet_to_upstream(SOCKET ns_sock,
     if (query_len <= 0 || query_len > BUFFER_SIZE)
         return -1;
 
-    ns = upstream_current();
+    ns = upstream_current();//获取当前上游服务器地址
     if (!ns)
         return -1;
 
-    memcpy(relay_buf, query, query_len);
+    memcpy(relay_buf, query, query_len);//复制原始查询报文到中继缓冲区
     relay_hdr = (DNS_HEADER *)relay_buf;
-    relay_hdr->id = htons(new_id);
-    relay_hdr->rd = 1;
+    relay_hdr->id = htons(new_id);//替换事务ID为分配的上游ID
+    relay_hdr->rd = 1;//设置递归查询标志，确保上游DNS返回最终结果
 
-    /*
-     * TEST-NET文档地址用于稳定演示超时和多上游切换，
-     * 避免本地网络透明DNS代理把不可达地址“解析成功”。
-     */
+
     if (upstream_current_is_test_blackhole()) {
         DEBUG1("Simulated timeout upstream: %s",
                inet_ntoa(ns->sin_addr));
         return query_len;
-    }
+    }//如果当前上游服务器在测试网范围内，模拟超时行为，直接返回查询长度，避免发送实际报文
 
     return sendto(ns_sock, (const char *)relay_buf, query_len, 0,
-                  (struct sockaddr *)ns, sizeof(*ns));
+                  (struct sockaddr *)ns, sizeof(*ns));//发送修改后的查询报文到当前上游DNS服务器
 }
 
 /* 只接受当前上游DNS返回的报文，丢弃迟到或来源异常的响应。 */
@@ -233,19 +231,20 @@ static int is_current_upstream_response(const struct sockaddr_in *resp_addr)
 static int relay_client_query(SOCKET ns_sock,
                               const unsigned char *query, int query_len,
                               struct sockaddr_in *client,
-                              const char *qname)
+                              const char *qname//解析出来的域名
+                             )
 {
     DNS_HEADER *hdr = (DNS_HEADER *)query;
-    uint16_t orig_id = ntohs(hdr->id);
-    uint16_t new_id = tid_map_alloc(orig_id, client, query, query_len);
-    struct sockaddr_in *ns = upstream_current();
+    uint16_t orig_id = ntohs(hdr->id);//提取原始查询报文中的事务ID
+    uint16_t new_id = tid_map_alloc(orig_id, client, query, query_len);//分配新ID
+    struct sockaddr_in *ns = upstream_current();//获取当前上游服务器地址
 
     if (new_id == 0) {
         LOG("[%ld] ERROR  TID table full, cannot relay %s\n",
             (long)time(NULL), qname);
         g_stats.errors++;
         return -1;
-    }
+    }//如果分配新ID失败，记录错误并返回
 
     if (!ns || send_packet_to_upstream(ns_sock, query, query_len, new_id) ==
         SOCKET_ERROR) {
@@ -254,9 +253,9 @@ static int relay_client_query(SOCKET ns_sock,
         tid_map_remove(new_id);
         g_stats.errors++;
         return -1;
-    }
+    }//没有上游或者发送失败，记录错误，移除TID映射并返回
 
-    g_stats.relayed++;
+    g_stats.relayed++;//统计转发次数
     LOG("[%ld] RELAY  %s -> %s\n",
         (long)time(NULL), qname, inet_ntoa(ns->sin_addr));
     return 0;
@@ -277,7 +276,9 @@ static void send_servfail_response(SOCKET server_sock,
 }
 
 /* 检查超时的中继请求：有备用上游则重发，否则返回SERVFAIL。 */
-static void handle_relay_timeouts(SOCKET server_sock, SOCKET ns_sock)
+static void handle_relay_timeouts(SOCKET server_sock,//本地socket
+                                  SOCKET ns_sock//上游socket
+                              )
 {
     TidTimeout timeout;
     int guard = 0;
@@ -287,35 +288,36 @@ static void handle_relay_timeouts(SOCKET server_sock, SOCKET ns_sock)
         int total_upstreams = upstream_count();
 
         extract_qname(timeout.query, timeout.query_len,
-                      qname, sizeof(qname));
-        if (qname[0] == '\0')
+                      qname, sizeof(qname));//从原始查询报文中提取查询域名，供日志使用
+        if (qname[0] == '\0')//提取失败时使用默认值
             strncpy(qname, "(unknown)", sizeof(qname) - 1);
         qname[sizeof(qname) - 1] = '\0';
 
         g_stats.relay_timeouts++;
 
         if (total_upstreams > 1 && timeout.attempts < total_upstreams) {
-            upstream_failover();
+            upstream_failover();//切换到下一个上游服务器
             if (send_packet_to_upstream(ns_sock, timeout.query,
                                         timeout.query_len,
                                         timeout.new_id) != SOCKET_ERROR) {
-                tid_map_mark_retry(timeout.new_id);
+                tid_map_mark_retry(timeout.new_id);//标记重试次数增加，并更新时间戳，避免过快再次超时
                 LOG("[%ld] TIMEOUT %s, retry upstream #%d\n",
                     (long)time(NULL), qname, upstream_index());
                 continue;
             }
-            g_stats.errors++;
+
+            g_stats.errors++;//如果重试发送失败，记录错误
             LOG("[%ld] ERROR  Retry sendto failed for %s\n",
                 (long)time(NULL), qname);
         }
 
         send_servfail_response(server_sock, timeout.query,
-                               timeout.query_len, &timeout.client);
+                               timeout.query_len, &timeout.client);//所有上游都尝试过后返回SERVFAIL
         tid_map_remove(timeout.new_id);
         LOG("[%ld] SERVFAIL %s after %d attempt(s)\n",
-            (long)time(NULL), qname, timeout.attempts);
+            (long)time(NULL), qname, timeout.attempts);//所有上游都尝试过后返回SERVFAIL，并记录日志
     }
-}
+}//guard 保证最多循环 256 次，不会死循环。
 
 /* 主程序入口。 */
 int main(int argc, char *argv[])
@@ -501,27 +503,27 @@ int main(int argc, char *argv[])
 
     /* 主事件循环：select统一等待客户端、上游和运行时命令。 */
     while (1) {
-        fd_set readfds;
-        struct timeval tv;
+        fd_set readfds;//文件描述符集合
+        struct timeval tv;//select等待的超时时间
         int max_fd;
-        int sel_ret;
+        int sel_ret;//select返回值
 
-        FD_ZERO(&readfds);
-        FD_SET(server_sock, &readfds);
-        FD_SET(ns_sock, &readfds);
-        max_fd = (server_sock > ns_sock) ? (int)server_sock : (int)ns_sock;
-        max_fd++;
+        FD_ZERO(&readfds);//清空文件描述符集合
+        FD_SET(server_sock, &readfds);//监视本地DNS服务socket的可读事件，即客户端查询到达
+        FD_SET(ns_sock, &readfds);//监视上游DNS socket的可读事件，即上游DNS响应到达
+        max_fd = (server_sock > ns_sock) ? (int)server_sock : (int)ns_sock;//计算当前最大的文件描述符值，供select使用
+        max_fd++;//select要求的参数是最大文件描述符值加1
 
-        tv.tv_sec  = 1;
+        tv.tv_sec  = 1;//超时1s
         tv.tv_usec = 0;
 
-        sel_ret = select(max_fd, &readfds, NULL, NULL, &tv);
+        sel_ret = select(max_fd, &readfds, NULL, NULL, &tv);//等待任一事件发生或超时
 
         if (sel_ret == SOCKET_ERROR) {
 #ifdef _WIN32
             int err = WSAGetLastError();
             if (err == WSAEINTR) continue;
-            DEBUG1("select() error: %d", err);
+            DEBUG1("select() error: %d", err);//Windows下select被信号中断时返回WSAEINTR，继续等待；其他错误则记录日志
 #else
             if (errno == EINTR) {
                 if (g_reload_requested) {
@@ -532,8 +534,8 @@ int main(int argc, char *argv[])
             }
             DEBUG1("select() error: %d", errno);
 #endif
-            handle_relay_timeouts(server_sock, ns_sock);
-            dns_cache_cleanup();
+            handle_relay_timeouts(server_sock, ns_sock);//在select错误时也检查中继超时，避免遗漏超时处理
+            dns_cache_cleanup();//在select错误时也清理过期缓存，保持缓存健康
             continue;
         }
 
@@ -542,13 +544,11 @@ int main(int argc, char *argv[])
             int c = try_read_stdin();
 
             if (c == 's' || c == 'S') {
-                stats_print();
-                printf("  Active TIDs   : %d / %d\n",
-                       tid_map_count(), MAX_CLIENTS);
-                printf("  Domain table  : %d entries\n", domain_count);
-                printf("  DNS cache     : %d / %d entries\n",
-                       dns_cache_count(), DNS_CACHE_MAX);
-                upstream_print();
+                stats_print();//打印统计信息
+                printf("  Active TIDs   : %d / %d\n",tid_map_count(), MAX_CLIENTS);//显示当前TID映射表中的活跃条目数量
+                printf("  Domain table  : %d entries\n", domain_count);//显示当前域名表中的记录数量
+                printf("  DNS cache     : %d / %d entries\n",dns_cache_count(), DNS_CACHE_MAX);//显示当前DNS缓存中的条目数量
+                upstream_print();//显示当前上游DNS服务器列表和状态
                 printf("========================================\n\n");
             } else if (c == 'c' || c == 'C') {
                 dns_cache_free();
@@ -563,7 +563,7 @@ int main(int argc, char *argv[])
         if (sel_ret == 0) {
             handle_relay_timeouts(server_sock, ns_sock);
             dns_cache_cleanup();
-            goto handle_reload_check;
+            goto handle_reload_check;//跳去热重载
         }
 
         /* 处理客户端DNS查询。 */
@@ -571,31 +571,30 @@ int main(int argc, char *argv[])
             socklen_t addr_len = sizeof(client_addr);
             recv_len = recvfrom(server_sock, (char *)recv_buf,
                                 sizeof(recv_buf), 0,
-                                (struct sockaddr *)&client_addr, &addr_len);
+                                (struct sockaddr *)&client_addr, &addr_len);//接收客户端查询报文，存储发送者地址信息
             if (recv_len == SOCKET_ERROR)
                 continue;
 
             if (recv_len < (int)sizeof(DNS_HEADER) + 5)
                 continue;
 
-            DNS_HEADER *hdr = (DNS_HEADER *)recv_buf;
+            DNS_HEADER *hdr = (DNS_HEADER *)recv_buf;//解析DNS报文头部，准备检查查询类型和域名
 
-            if (hdr->qr != 0 || hdr->opcode != 0)
+            if (hdr->qr != 0 || hdr->opcode != 0)//只处理标准查询报文
                 continue;
 
-            g_stats.total_queries++;
+            g_stats.total_queries++;//统计收到的查询总数
 
             /* 解析查询域名、类型和类别。 */
             char qname[DOMAIN_MAX];
             char cache_key[DNS_CACHE_KEY_MAX];
             uint16_t qtype = 0, qclass = 0;
 
-            dns_parse_qname(recv_buf, recv_len, sizeof(DNS_HEADER),
-                            qname, sizeof(qname));
+            dns_parse_qname(recv_buf, recv_len, sizeof(DNS_HEADER),qname, sizeof(qname));//从查询报文中提取查询域名，存储在qname变量中
             if (!dns_parse_question(recv_buf, recv_len, &qtype, &qclass)) {
                 g_stats.errors++;
                 continue;
-            }
+            }//如果解析失败，记录错误并跳过处理
             make_cache_key(cache_key, sizeof(cache_key),
                            qname, qtype, qclass);
 
@@ -609,30 +608,33 @@ int main(int argc, char *argv[])
                 (long)time(NULL), ntohs(hdr->id), type_str, qname);
 
             /* 第一步：查本地域名表。 */
-            uint32_t answer_ip;
+            uint32_t answer_ip;//查询结果IP地址，0表示未命中或被拦截
             int search_result = domain_table_search(qname, &answer_ip);
 
             if (search_result >= 0) {
-                if (search_result == 1) {
+                if (search_result == 1) //拦截
+                {
                     LOG("[%ld] BLOCK  %s\n", (long)time(NULL), qname);
                     send_local_response(server_sock, recv_buf, recv_len,
-                                        &client_addr, 0, 1);
-                } else {
+                                        &client_addr, 0, 1);//构造并发送NXDOMAIN响应，告知客户端该域名不存在
+                } 
+                //普通命中
+                else {
                     if (qtype != DNS_TYPE_A || qclass != DNS_CLASS_IN) {
-                        if (relay_client_query(ns_sock, recv_buf, recv_len,
-                                               &client_addr, qname) < 0) {
+                        if (relay_client_query(ns_sock, recv_buf, recv_len,&client_addr, qname) < 0)//如果转发失败则返回SERVFAIL
+                        {
                             send_servfail_response(server_sock, recv_buf,
                                                    recv_len, &client_addr);
                         }
                         continue;
-                    }
+                    }//如果查询类型不是A记录或查询类别不是IN类，转发到上游DNS服务器
                     struct in_addr addr;
                     addr.s_addr = answer_ip;
                     LOG("[%ld] HIT    %s -> %s\n",
                         (long)time(NULL), qname, inet_ntoa(addr));
                     send_local_response(server_sock, recv_buf, recv_len,
                                         &client_addr, answer_ip, 0);
-                }
+                }//构造并发送本地普通响应，包含查询结果IP地址
                 continue;
             }
 
@@ -649,7 +651,7 @@ int main(int argc, char *argv[])
                            (struct sockaddr *)&client_addr, sizeof(client_addr));
                     continue;
                 }
-            }
+            }//如果缓存命中，构造响应报文并发送给客户端，统计缓存命中次数，并跳过后续处理
 
             /* 第三步：本地和缓存均未命中，转发上游DNS。 */
             if (relay_client_query(ns_sock, recv_buf, recv_len,
@@ -661,13 +663,13 @@ int main(int argc, char *argv[])
 
         /* 处理上游DNS响应。 */
         if (FD_ISSET(ns_sock, &readfds)) {
-            struct sockaddr_in ns_resp_addr;
+            struct sockaddr_in ns_resp_addr;//接收上游DNS响应的地址
             socklen_t ns_addr_len = sizeof(ns_resp_addr);
 
             int ns_resp_len = recvfrom(ns_sock, (char *)ns_buf,
                                        sizeof(ns_buf), 0,
                                        (struct sockaddr *)&ns_resp_addr,
-                                       &ns_addr_len);
+                                       &ns_addr_len);//接收上游DNS响应报文，存储地址信息
             if (ns_resp_len == SOCKET_ERROR)
                 continue;
 
@@ -679,7 +681,7 @@ int main(int argc, char *argv[])
                        inet_ntoa(ns_resp_addr.sin_addr),
                        ntohs(ns_resp_addr.sin_port));
                 continue;
-            }
+            }//验证响应来源是否为当前上游DNS服务器，丢弃来源异常的响应
 
             DNS_HEADER *ns_resp_hdr = (DNS_HEADER *)ns_buf;
             uint16_t ns_id = ntohs(ns_resp_hdr->id);
@@ -693,8 +695,8 @@ int main(int argc, char *argv[])
                 /* 上游成功响应后，如发生过切换则恢复主上游。 */
                 upstream_success();
 
-                /* 恢复客户端原始事务ID。 */
-                ns_resp_hdr->id = htons(orig_id_back);
+               
+                ns_resp_hdr->id = htons(orig_id_back);//将上游响应报文中的事务ID替换回客户端原始ID
 
                 /* 缓存成功的上游响应。 */
                 {
@@ -703,12 +705,10 @@ int main(int argc, char *argv[])
                     uint16_t cache_qtype = 0, cache_qclass = 0;
                     extract_qname(ns_buf, ns_resp_len, cache_qname,
                                   sizeof(cache_qname));
-                    if (cache_qname[0] != '\0' &&
-                        dns_parse_question(ns_buf, ns_resp_len,
-                                           &cache_qtype, &cache_qclass) &&
-                        ns_resp_hdr->rcode == RCODE_OK &&
-                        ntohs(ns_resp_hdr->ancount) > 0) {
-                        uint32_t ttl = dns_extract_ttl(ns_buf, ns_resp_len);
+                    if (cache_qname[0] != '\0' &&ns_parse_question(ns_buf, ns_resp_len,&cache_qtype, &cache_qclass)
+                     &&ns_resp_hdr->rcode == RCODE_OK &&ntohs(ns_resp_hdr->ancount) > 0)//只有当成功解析出查询域名、类型和类别，并且上游响应状态码为0（成功）且包含至少一个答案时，才考虑缓存该响应
+                   {
+                        uint32_t ttl = dns_extract_ttl(ns_buf, ns_resp_len);//从上游响应报文中提取TTL值，决定缓存有效期
                         if (ttl > 0) {
                             make_cache_key(response_cache_key,
                                            sizeof(response_cache_key),
@@ -717,12 +717,12 @@ int main(int argc, char *argv[])
                             dns_cache_put(response_cache_key, ns_buf,
                                           ns_resp_len, ttl);
                         }
-                    }
+                   }
                 }
 
                 sendto(server_sock, (const char *)ns_buf, ns_resp_len, 0,
                        (struct sockaddr *)&orig_client,
-                       sizeof(orig_client));
+                       sizeof(orig_client));//将上游响应报文发送回原始客户端地址
 
                 LOG("[%ld] REPLY  forwarded (cached)\n", (long)time(NULL));
             } else {
@@ -733,7 +733,7 @@ int main(int argc, char *argv[])
 
 handle_reload_check:
     ;
-    runtime_reload_poll(config_file, g_logfile);
+    runtime_reload_poll(config_file, g_logfile);//在每次事件循环结束时检查配置文件是否有修改，如果有则自动重载域名表，并记录日志。
     }
 
     /* 正常情况下不会执行到这里。 */
@@ -741,5 +741,5 @@ handle_reload_check:
     closesocket(ns_sock);
     if (g_logfile) fclose(g_logfile);
     cleanup_winsock();
-    return 0;
+    return 0;//程序结束，关闭socket和日志文件，清理网络库资源
 }
